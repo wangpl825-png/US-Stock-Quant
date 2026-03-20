@@ -64,7 +64,7 @@ strategy = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.subheader("📋 我的觀察名單 (Watchlist)")
 
-# 1. 新增股票到觀察名單
+# 新增股票到觀察名單
 col1, col2 = st.sidebar.columns([2, 1])
 new_ticker = col1.text_input("新增代號", placeholder="例如 MSFT").upper()
 if col2.button("加入") and new_ticker:
@@ -74,13 +74,12 @@ if col2.button("加入") and new_ticker:
     else:
         st.sidebar.warning("已在名單中")
 
-# 2. 顯示並允許刪減當前觀察名單
+# 顯示並允許刪減當前觀察名單
 current_watchlist = st.sidebar.multiselect(
     "目前名單 (點擊 'x' 移除)",
     options=st.session_state.watchlist,
     default=st.session_state.watchlist
 )
-# 更新 session state
 st.session_state.watchlist = current_watchlist
 
 st.sidebar.markdown("---")
@@ -96,7 +95,6 @@ if strategy == "歷史回溯投資試算 💰":
     backtest_amount_usd = st.sidebar.number_input("投資金額 (USD)", min_value=100, value=10000, step=1000)
 
 WATCHLIST_TICKERS = list(TICKER_NAME_MAP.keys())[1:] # 排除VOO (預設掃描池)
-
 st.sidebar.info(f"💱 目前匯率參考: 1 USD ≈ {USD_TO_TWD:.2f} TWD")
 
 # ==========================================
@@ -172,6 +170,56 @@ def calculate_indicators(df):
         return df
 
 # ==========================================
+# ★ 新增：動態化技術指標白話文解讀函數
+# ==========================================
+def generate_technical_summary(df, ticker):
+    """讀取最新一天的數據，產生易懂的白話文分析"""
+    latest = df.iloc[-1]
+    
+    close = float(latest['Close'])
+    sma5 = float(latest['SMA_5'])
+    macd = float(latest['MACD'])
+    signal = float(latest['MACD_Signal'])
+    hist = float(latest['MACD_Hist'])
+    rsi = float(latest['RSI_14'])
+    k = float(latest['K'])
+    d = float(latest['D'])
+    bbu = float(latest['BBU_20'])
+    bbl = float(latest['BBL_20'])
+
+    summary = f"#### 🤖 {get_stock_name(ticker)} 最新技術指標 AI 診斷 (收盤價: ${close:.2f})\n\n"
+    
+    # 1. 趨勢與布林通道判斷
+    trend_status = "**短期強勢** (站上5日均線)" if close > sma5 else "**短期弱勢** (跌破5日均線)"
+    bb_status = "，目前股價在布林通道**正常區間內**震盪。"
+    if close > bbu:
+        bb_status = "，且突破布林通道上軌，**短期可能過熱，留意拉回風險**。"
+    elif close < bbl:
+        bb_status = "，且跌破布林通道下軌，**可能出現超跌反彈的契機**。"
+        
+    summary += f"* **📈 趨勢與型態**：目前股價屬於{trend_status}{bb_status}\n"
+    
+    # 2. MACD 判斷
+    macd_trend = "多頭排列 (MACD線 > 訊號線)" if macd > signal else "空頭排列 (MACD線 < 訊號線)"
+    macd_mom = "正向，買盤動能較強" if hist > 0 else "負向，賣壓相對較重"
+    summary += f"* **🌊 MACD 動能**：呈現**{macd_trend}**，柱狀圖顯示目前動能**{macd_mom}**。\n"
+    
+    # 3. RSI 判斷
+    if rsi >= 70:
+        rsi_status = f"**超買區 ({rsi:.1f} > 70)**，市場情緒極度樂觀，需留意短線獲利了結賣壓。"
+    elif rsi <= 30:
+        rsi_status = f"**超賣區 ({rsi:.1f} < 30)**，市場情緒悲觀，隨時有機會醞釀底部反彈。"
+    else:
+        rsi_status = f"**中立區間 ({rsi:.1f})**，多空雙方目前力道相對均衡，未見極端情緒。"
+    summary += f"* **⚖️ RSI 買賣力道**：目前處於{rsi_status}\n"
+    
+    # 4. KD 判斷
+    kd_cross = "黃金交叉 (K值大於D值)，有利多方表態" if k > d else "死亡交叉 (K值小於D值)，走勢偏向弱勢整理"
+    summary += f"* **🎯 KD 隨機指標**：目前呈現**{kd_cross}** (K: {k:.1f}, D: {d:.1f})。\n"
+    
+    return summary
+
+# ==========================================
 # 圖表繪製函式
 # ==========================================
 def plot_comparison_chart(stock_data, tickers):
@@ -203,29 +251,25 @@ def plot_mc_distribution(last_price, sampled_paths, final_prices, ticker, days_a
     return fig
 
 def plot_technical_chart(df, ticker):
-    plot_df = df.tail(100) # 顯示近 100 天的 K 線
+    plot_df = df.tail(100)
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
                         row_heights=[0.5, 0.15, 0.15, 0.2],
                         subplot_titles=(f"{get_stock_name(ticker)} K線與布林通道", "MACD", "RSI", "KD 指標"))
 
-    # 1. K線與布林通道
     fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['SMA_5'], line=dict(color='orange', width=1.5), name='5MA'), row=1, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BBU_20'], line=dict(color='rgba(150,150,150,0.5)', dash='dash'), name='BB Up'), row=1, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BBL_20'], line=dict(color='rgba(150,150,150,0.5)', dash='dash'), fill='tonexty', fillcolor='rgba(150,150,150,0.1)', name='BB Low'), row=1, col=1)
 
-    # 2. MACD
     colors = ['crimson' if val >= 0 else 'forestgreen' for val in plot_df['MACD_Hist']]
     fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['MACD_Hist'], marker_color=colors, name='Histogram'), row=2, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MACD'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MACD_Signal'], line=dict(color='orange', width=1), name='Signal'), row=2, col=1)
 
-    # 3. RSI
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI_14'], line=dict(color='purple', width=1.5), name='RSI'), row=3, col=1)
-    fig.add_hline(y=70, line_dash="dot", row=3, col=1, line_color="red", annotation_text="超買 (70)")
-    fig.add_hline(y=30, line_dash="dot", row=3, col=1, line_color="green", annotation_text="超賣 (30)")
+    fig.add_hline(y=70, line_dash="dot", row=3, col=1, line_color="red")
+    fig.add_hline(y=30, line_dash="dot", row=3, col=1, line_color="green")
 
-    # 4. KD 指標
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], line=dict(color='blue', width=1.5), name='K'), row=4, col=1)
     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], line=dict(color='orange', width=1.5), name='D'), row=4, col=1)
 
@@ -270,14 +314,15 @@ if strategy == "歷史回溯投資試算 💰":
                 col2.metric("投資報酬率 (ROI)", f"{roi:.2f}%", f"+ ${profit_usd:,.0f} USD (約 NT$ {profit_twd:,.0f})" if roi > 0 else f"- ${abs(profit_usd):,.0f} USD")
                 col3.metric("今日現價", f"${current_price:.2f} USD", f"價差: ${current_price - past_price:.2f}")
 
-                # 顯示技術圖表
                 df_ta = calculate_indicators(df.copy())
                 st.plotly_chart(plot_technical_chart(df_ta, backtest_ticker), use_container_width=True)
+                
+                # ★ 在圖表下方顯示動態文字解讀
+                st.info(generate_technical_summary(df_ta, backtest_ticker))
 
 else:
     with st.spinner('正在載入市場資料與執行分析...'):
         if strategy == "自選股蒙地卡羅 (含圖表) 🎲":
-            # 直接使用左側邊欄的 watchlist 作為分析標的
             target_tickers = st.session_state.watchlist.copy()
             if not target_tickers:
                 st.warning("您的觀察名單目前是空的，請從左側邊欄新增！")
@@ -344,6 +389,8 @@ else:
                 
                 st.markdown("---")
                 
-                # 這裡把蒙地卡羅與技術指標圖表呼叫回來了！
                 st.plotly_chart(plot_mc_distribution(row['Price'], row['sampled_paths'], row['final_prices'], row['Ticker'], DAYS_AHEAD), use_container_width=True)
                 st.plotly_chart(plot_technical_chart(row['DF_TA'], row['Ticker']), use_container_width=True)
+                
+                # ★ 在圖表下方顯示動態文字解讀 (使用 st.info 產生淺藍色提示框)
+                st.info(generate_technical_summary(row['DF_TA'], row['Ticker']))
