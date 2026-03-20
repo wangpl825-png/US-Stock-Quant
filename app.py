@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # ==========================================
-# 1. & 2. 美股代號與全名對照表 (VOO 作為大盤基準)
+# 美股代號與全名對照表 (VOO 作為大盤基準)
 # ==========================================
 TICKER_NAME_MAP = {
     "VOO": "Vanguard S&P 500 ETF (大盤基準)",
@@ -29,14 +29,18 @@ def get_stock_name(ticker):
     return f"{ticker} {name}".strip()
 
 # ==========================================
-# 網頁基本設定
+# 網頁基本設定 & 初始化 Session State
 # ==========================================
 st.set_page_config(page_title="美股量化預測與回測系統", page_icon="📈", layout="wide")
 st.title("📈 美股量化預測與回測系統")
 st.markdown("結合蒙地卡羅模擬、技術指標圖表與歷史回測，精準掌握投資勝率。")
 
+# 初始化觀察名單 (Watchlist)
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ["AAPL", "NVDA", "TSLA"]
+
 # ==========================================
-# 6. 獲取即時美金轉台幣匯率
+# 獲取即時美金轉台幣匯率
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_exchange_rate():
@@ -49,7 +53,7 @@ def get_exchange_rate():
 USD_TO_TWD = get_exchange_rate()
 
 # ==========================================
-# 側邊欄：功能選單與動態輸入
+# 側邊欄：功能選單、動態參數與 Watchlist
 # ==========================================
 st.sidebar.header("🎯 策略與功能選擇")
 strategy = st.sidebar.radio(
@@ -57,25 +61,43 @@ strategy = st.sidebar.radio(
     ("歷史回溯投資試算 💰", "自選股蒙地卡羅 (含圖表) 🎲", "大盤觀測: 成交量 Top 10", "大盤觀測: 強勢噴出 (單日>15%)")
 )
 
-# 5. 動態調整模擬參數 (DAYS_AHEAD)
 st.sidebar.markdown("---")
-st.sidebar.subheader("蒙地卡羅參數設定")
+st.sidebar.subheader("📋 我的觀察名單 (Watchlist)")
+
+# 1. 新增股票到觀察名單
+col1, col2 = st.sidebar.columns([2, 1])
+new_ticker = col1.text_input("新增代號", placeholder="例如 MSFT").upper()
+if col2.button("加入") and new_ticker:
+    if new_ticker not in st.session_state.watchlist:
+        st.session_state.watchlist.append(new_ticker)
+        st.sidebar.success(f"已加入 {new_ticker}")
+    else:
+        st.sidebar.warning("已在名單中")
+
+# 2. 顯示並允許刪減當前觀察名單
+current_watchlist = st.sidebar.multiselect(
+    "目前名單 (點擊 'x' 移除)",
+    options=st.session_state.watchlist,
+    default=st.session_state.watchlist
+)
+# 更新 session state
+st.session_state.watchlist = current_watchlist
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ 蒙地卡羅參數設定")
 SIMULATION_RUNS = 10000
 DAYS_AHEAD = st.sidebar.slider("預測未來天數 (天)", min_value=7, max_value=365, value=30, step=1)
 
 if strategy == "歷史回溯投資試算 💰":
     st.sidebar.markdown("---")
     st.sidebar.subheader("回測設定")
-    backtest_ticker = st.sidebar.text_input("輸入自選美股代號", "NVDA").upper()
+    backtest_ticker = st.sidebar.text_input("輸入要回測的美股代號", "NVDA").upper()
     backtest_days = st.sidebar.number_input("回溯天數 (天)", min_value=1, max_value=1000, value=30)
     backtest_amount_usd = st.sidebar.number_input("投資金額 (USD)", min_value=100, value=10000, step=1000)
 
-elif strategy == "自選股蒙地卡羅 (含圖表) 🎲":
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("自選股設定")
-    custom_tickers_input = st.sidebar.text_input("輸入自選股代號 (用逗號分隔)", "AAPL, NVDA, TSLA").upper()
+WATCHLIST_TICKERS = list(TICKER_NAME_MAP.keys())[1:] # 排除VOO (預設掃描池)
 
-WATCHLIST_TICKERS = list(TICKER_NAME_MAP.keys())[1:] # 排除VOO
+st.sidebar.info(f"💱 目前匯率參考: 1 USD ≈ {USD_TO_TWD:.2f} TWD")
 
 # ==========================================
 # 資料獲取與運算函式
@@ -84,7 +106,7 @@ WATCHLIST_TICKERS = list(TICKER_NAME_MAP.keys())[1:] # 排除VOO
 def get_stock_data(tickers):
     data_dict = {}
     for t in tickers:
-        df = yf.download(t.strip(), period="2y", progress=False) # 移除 .TW
+        df = yf.download(t.strip(), period="2y", progress=False)
         if not df.empty and len(df) > 100:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [c[0] for c in df.columns]
@@ -92,7 +114,6 @@ def get_stock_data(tickers):
             data_dict[t.strip()] = df
     return data_dict
 
-# 4. 獲取分析師評分 (使用 yfinance 內建資訊作為替代方案)
 @st.cache_data(ttl=86400)
 def get_analyst_ratings(ticker):
     try:
@@ -151,7 +172,7 @@ def calculate_indicators(df):
         return df
 
 # ==========================================
-# 圖表繪製函式 (略作簡化，保留原本架構)
+# 圖表繪製函式
 # ==========================================
 def plot_comparison_chart(stock_data, tickers):
     fig = go.Figure()
@@ -167,14 +188,53 @@ def plot_comparison_chart(stock_data, tickers):
     fig.update_layout(title="📈 多檔股票與大盤(VOO) 過去一年同期績效比較 (%)", xaxis_title="日期", yaxis_title="累積報酬率 (%)", hovermode="x unified", height=400)
     return fig
 
-# 蒙地卡羅與技術分析圖表函數沿用您原有的邏輯即可，為節省長度此處略過宣告細節，請確保原有的 plot_mc_distribution 與 plot_technical_chart 函式留在這裡。
-# (這裡假設原有的 plot_mc_distribution 和 plot_technical_chart 存在)
+def plot_mc_distribution(last_price, sampled_paths, final_prices, ticker, days_ahead):
+    fig = make_subplots(rows=1, cols=2, column_widths=[0.7, 0.3], 
+                        subplot_titles=(f"{get_stock_name(ticker)} 模擬未來 {days_ahead} 日走勢 (抽樣100條)", "最終預測價格分佈"))
+    
+    for i in range(sampled_paths.shape[1]):
+        fig.add_trace(go.Scatter(y=sampled_paths[:, i], mode='lines', line=dict(color='rgba(100, 150, 250, 0.1)')), row=1, col=1)
+    fig.add_hline(y=last_price, line_dash="dash", line_color="red", row=1, col=1, annotation_text="現價起點")
+    
+    fig.add_trace(go.Histogram(y=final_prices, orientation='h', marker_color='royalblue', opacity=0.7), row=1, col=2)
+    fig.add_hline(y=last_price, line_dash="dash", line_color="red", row=1, col=2)
+    
+    fig.update_layout(showlegend=False, height=400, margin=dict(l=20, r=20, t=40, b=20))
+    return fig
+
+def plot_technical_chart(df, ticker):
+    plot_df = df.tail(100) # 顯示近 100 天的 K 線
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
+                        row_heights=[0.5, 0.15, 0.15, 0.2],
+                        subplot_titles=(f"{get_stock_name(ticker)} K線與布林通道", "MACD", "RSI", "KD 指標"))
+
+    # 1. K線與布林通道
+    fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['SMA_5'], line=dict(color='orange', width=1.5), name='5MA'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BBU_20'], line=dict(color='rgba(150,150,150,0.5)', dash='dash'), name='BB Up'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BBL_20'], line=dict(color='rgba(150,150,150,0.5)', dash='dash'), fill='tonexty', fillcolor='rgba(150,150,150,0.1)', name='BB Low'), row=1, col=1)
+
+    # 2. MACD
+    colors = ['crimson' if val >= 0 else 'forestgreen' for val in plot_df['MACD_Hist']]
+    fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['MACD_Hist'], marker_color=colors, name='Histogram'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MACD'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MACD_Signal'], line=dict(color='orange', width=1), name='Signal'), row=2, col=1)
+
+    # 3. RSI
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI_14'], line=dict(color='purple', width=1.5), name='RSI'), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", row=3, col=1, line_color="red", annotation_text="超買 (70)")
+    fig.add_hline(y=30, line_dash="dot", row=3, col=1, line_color="green", annotation_text="超賣 (30)")
+
+    # 4. KD 指標
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['K'], line=dict(color='blue', width=1.5), name='K'), row=4, col=1)
+    fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['D'], line=dict(color='orange', width=1.5), name='D'), row=4, col=1)
+
+    fig.update_layout(height=800, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+    return fig
 
 # ==========================================
 # 核心邏輯路由
 # ==========================================
-st.sidebar.info(f"💱 目前匯率參考: 1 USD ≈ {USD_TO_TWD:.2f} TWD")
-
 if strategy == "歷史回溯投資試算 💰":
     st.subheader(f"🕰️ 歷史投資時光機：{get_stock_name(backtest_ticker)}")
     with st.spinner("正在穿越時空調取資料..."):
@@ -200,7 +260,6 @@ if strategy == "歷史回溯投資試算 💰":
                 profit_usd = current_value_usd - backtest_amount_usd
                 roi = (profit_usd / backtest_amount_usd) * 100
                 
-                # 6. 計算台幣價值
                 current_value_twd = current_value_usd * USD_TO_TWD
                 profit_twd = profit_usd * USD_TO_TWD
                 
@@ -211,10 +270,18 @@ if strategy == "歷史回溯投資試算 💰":
                 col2.metric("投資報酬率 (ROI)", f"{roi:.2f}%", f"+ ${profit_usd:,.0f} USD (約 NT$ {profit_twd:,.0f})" if roi > 0 else f"- ${abs(profit_usd):,.0f} USD")
                 col3.metric("今日現價", f"${current_price:.2f} USD", f"價差: ${current_price - past_price:.2f}")
 
+                # 顯示技術圖表
+                df_ta = calculate_indicators(df.copy())
+                st.plotly_chart(plot_technical_chart(df_ta, backtest_ticker), use_container_width=True)
+
 else:
     with st.spinner('正在載入市場資料與執行分析...'):
         if strategy == "自選股蒙地卡羅 (含圖表) 🎲":
-            target_tickers = [t.strip() for t in custom_tickers_input.split(",")]
+            # 直接使用左側邊欄的 watchlist 作為分析標的
+            target_tickers = st.session_state.watchlist.copy()
+            if not target_tickers:
+                st.warning("您的觀察名單目前是空的，請從左側邊欄新增！")
+                st.stop()
             if "VOO" not in target_tickers:
                 target_tickers.append("VOO")
         else:
@@ -228,7 +295,6 @@ else:
             sorted_tickers = sorted(vol_dict, key=vol_dict.get, reverse=True)
             filtered_tickers = sorted_tickers[:10]
         elif strategy == "大盤觀測: 強勢噴出 (單日>15%)":
-            # 3. 動能條件改為：單日漲幅 > 15%
             for t, df in stock_data.items():
                 if len(df) >= 2:
                     daily_change = (df['Close'].iloc[-1] / df['Close'].iloc[-2]) - 1
@@ -248,9 +314,7 @@ else:
             for t in filtered_tickers:
                 df = stock_data[t]
                 df_ta = calculate_indicators(df.copy())
-                # 傳入動態的 DAYS_AHEAD
                 p90, p50, p10, p1, win_rate, price, final_prices, sampled_paths = calculate_monte_carlo(df_ta, SIMULATION_RUNS, DAYS_AHEAD)
-                # 獲取評分
                 rec, target = get_analyst_ratings(t)
                 
                 results.append({
@@ -265,12 +329,10 @@ else:
         st.subheader(f"📌 分析結果清單 (依預測中位數排序)")
         
         for idx, row in res_df.iterrows():
-            # 6. 加入美金與台幣顯示
             price_twd = row['Price'] * USD_TO_TWD
             header_text = f"**{get_stock_name(row['Ticker'])}** | 現價: ${row['Price']} USD (約 NT${price_twd:,.0f}) | 🏆 勝率: {row['Win_Rate']*100:.1f}%"
             
             with st.expander(header_text):
-                # 4. 顯示投顧評分 (使用 yfinance 替代方案)
                 st.markdown(f"**機構共識評級:** `{row['Rec']}` | **平均目標價:** `${row['Target']}`")
                 
                 st.markdown(f"##### 🎲 蒙地卡羅未來 {DAYS_AHEAD} 天預測")
@@ -281,4 +343,7 @@ else:
                 c4.metric("極端風險 (P1)", f"{row['P1_Return']*100:.2f}%", delta_color="inverse")
                 
                 st.markdown("---")
-                # (請在此處呼叫原本的 plot_mc_distribution 與 plot_technical_chart)
+                
+                # 這裡把蒙地卡羅與技術指標圖表呼叫回來了！
+                st.plotly_chart(plot_mc_distribution(row['Price'], row['sampled_paths'], row['final_prices'], row['Ticker'], DAYS_AHEAD), use_container_width=True)
+                st.plotly_chart(plot_technical_chart(row['DF_TA'], row['Ticker']), use_container_width=True)
